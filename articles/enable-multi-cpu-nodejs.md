@@ -2,7 +2,7 @@
 title: "Node.jsでマルチCPUコアを使ってスケールする方法（+Kubernetes）"
 emoji: "🪄"
 type: "tech" 
-topics: ["Nodejs","Kubernetes"]
+topics: ["nodejs","kubernetes","javascript"]
 published: true
 ---
 

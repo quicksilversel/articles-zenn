@@ -1,0 +1,170 @@
+name:  Cross Post Articles to Qiita
+
+on:
+  push:
+    branches:
+      - main
+    paths: 
+      - "articles/*.md"
+  pull_request:
+    branches:
+      - main
+    paths: 
+      - "articles/*.md"
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  process-articles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Get changed article files
+        id: changed_files
+        run: |
+          if [ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]; then
+            # Initial commit or force push
+            echo "changed_files=$(git ls-files articles/*.md | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          else
+            # Get changed files between commits
+            echo "changed_files=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- 'articles/*.md' | tr '\n' ' ')" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Process and transform articles
+        if: steps.changed_files.outputs.changed_files != ''
+        run: |
+          # Create public directory if it doesn't exist
+          mkdir -p public
+          
+          # Process each changed file
+          for file in ${{ steps.changed_files.outputs.changed_files }}; do
+            if [ -f "$file" ]; then
+              echo "Processing: $file"
+              filename=$(basename "$file")
+              output_file="public/$filename"
+              
+              # Extract frontmatter and content
+              awk '
+              BEGIN { in_frontmatter = 0; content_started = 0 }
+              /^---$/ { 
+                if (!content_started) {
+                  if (in_frontmatter == 0) { 
+                    in_frontmatter = 1
+                    print "---"
+                  } else {
+                    in_frontmatter = 0
+                    content_started = 1
+                    # Print transformed frontmatter
+                    if (title != "") print "title: " title
+                    
+                    # Transform topics to tags
+                    if (topics != "") {
+                      gsub(/^\[/, "", topics)
+                      gsub(/\]$/, "", topics)
+                      gsub(/"/, "", topics)
+                      gsub(/, /, "\n  - ", topics)
+                      print "tags:"
+                      print "  - " topics
+                    } else {
+                      print "tags:"
+                      print "  - \"\""
+                    }
+                    
+                    # Transform published to private
+                    if (published == "true") {
+                      print "private: false"
+                    } else if (published == "false") {
+                      print "private: true"
+                    } else {
+                      print "private: false"
+                    }
+                    
+                    # Add fixed fields
+                    print "updated_at: \"\""
+                    print "id: null"
+                    print "organization_url_name: null"
+                    print "slide: false"
+                    print "ignorePublish: false"
+                    print "---"
+                  }
+                  next
+                }
+              }
+              in_frontmatter == 1 {
+                # Parse frontmatter fields
+                if ($0 ~ /^title:/) {
+                  title = substr($0, index($0, ":") + 1)
+                  gsub(/^ *"?/, "", title)
+                  gsub(/"? *$/, "", title)
+                }
+                else if ($0 ~ /^topics:/) {
+                  topics = substr($0, index($0, ":") + 1)
+                  gsub(/^ */, "", topics)
+                }
+                else if ($0 ~ /^published:/) {
+                  published = substr($0, index($0, ":") + 1)
+                  gsub(/^ */, "", published)
+                  gsub(/ *$/, "", published)
+                }
+              }
+              content_started == 1 {
+                # Print content as-is
+                print
+              }
+              ' "$file" > "$output_file"
+              
+              echo "Created/Updated: $output_file"
+            fi
+          done
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet HEAD -- public/; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            # Get list of modified files for PR title
+            modified_files=$(git diff --name-only HEAD -- public/ | head -1)
+            if [ -n "$modified_files" ]; then
+              article_name=$(basename "$modified_files" .md)
+              echo "article_name=$article_name" >> $GITHUB_OUTPUT
+            fi
+          fi
+      
+      - name: Create Pull Request
+        if: steps.check_changes.outputs.has_changes == 'true'
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "Transform article frontmatter for Qiita"
+          title: "Post ${{ steps.check_changes.outputs.article_name }}.md to Qiita"
+          body: |
+            This PR contains transformed articles for Qiita publication.
+            
+            ## Changes
+            - Transformed frontmatter format from articles/ to Qiita format
+            - Files are saved in public/ directory
+            
+            ## Frontmatter Transformation
+            - `topics` → `tags` (array format)
+            - `published` → `private` (inverted boolean)
+            - Removed `emoji` and `type` fields
+            - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
+          branch: qiita-post-${{ github.run_number }}
+          delete-branch: true
+          base: main
+          reviewers: |
+            'quicksilversel'

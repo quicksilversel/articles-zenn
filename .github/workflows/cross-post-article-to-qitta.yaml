@@ -137,50 +137,123 @@ jobs:
             fi
           done
       
-      - name: Check for changes
+      - name: Check for changes and prepare
         id: check_changes
         if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if git diff --quiet HEAD -- public/; then
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          else
+          # Check if there are any changes in public/ (both tracked and untracked)
+          if [ -n "$(git status --porcelain public/)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            # Get list of modified files for PR title
-            modified_files=$(git diff --name-only HEAD -- public/ | head -1)
-            if [ -n "$modified_files" ]; then
-              article_name=$(basename "$modified_files" .md)
+            echo "Changes detected in public/"
+            
+            # Get first changed file for PR title
+            first_file=$(ls -1 public/*.md 2>/dev/null | head -1)
+            if [ -n "$first_file" ]; then
+              article_name=$(basename "$first_file" .md)
               echo "article_name=$article_name" >> $GITHUB_OUTPUT
+              echo "Article name: $article_name"
             fi
-            # Count number of articles processed
-            num_articles=$(git diff --name-only HEAD -- public/ | wc -l)
+            
+            # Count number of articles
+            num_articles=$(ls -1 public/*.md 2>/dev/null | wc -l)
             echo "num_articles=$num_articles" >> $GITHUB_OUTPUT
+            echo "Number of articles: $num_articles"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in public/"
           fi
+      
+      - name: Commit and Push Changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Create and checkout branch
+          BRANCH_NAME="qiita-post-articles"
+          
+          # Fetch the branch if it exists
+          git fetch origin $BRANCH_NAME:$BRANCH_NAME 2>/dev/null || true
+          
+          # Checkout or create branch
+          if git show-ref --verify --quiet refs/heads/$BRANCH_NAME; then
+            echo "Branch $BRANCH_NAME exists, checking out"
+            git checkout $BRANCH_NAME
+            git merge origin/main --no-edit || true
+          else
+            echo "Creating new branch $BRANCH_NAME"
+            git checkout -b $BRANCH_NAME
+          fi
+          
+          # Add and commit changes
+          git add public/
+          git commit -m "Transform article frontmatter for Qiita" || echo "No changes to commit"
+          
+          # Push branch
+          git push -u origin $BRANCH_NAME --force
       
       - name: Create or Update Pull Request
         if: steps.check_changes.outputs.has_changes == 'true'
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Transform article frontmatter for Qiita"
-          title: "Post ${{ steps.check_changes.outputs.article_name }}.md to Qiita"
-          body: |
-            This PR contains transformed articles for Qiita publication.
-            
-            ## Changes
-            - Transformed frontmatter format from articles/ to Qiita format
-            - Files are saved in public/ directory
-            - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
-            
-            ## Frontmatter Transformation
-            - `topics` → `tags` (array format)
-            - `published` → `private` (inverted boolean)
-            - Removed `emoji` and `type` fields
-            - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
-            
-            ## Source
-            - Triggered by: ${{ github.event_name }}
-            - Source branch: ${{ github.head_ref || github.ref_name }}
-          branch: qiita-post-articles
-          delete-branch: false
-          base: main
-          reviewers: quicksilversel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="qiita-post-articles"
+          PR_TITLE="Post ${{ steps.check_changes.outputs.article_name }}.md to Qiita"
+          
+          # Check if PR already exists
+          PR_NUMBER=$(gh pr list --base main --head $BRANCH_NAME --json number --jq '.[0].number' || echo "")
+          
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Updating existing PR #$PR_NUMBER"
+            # Update PR title and body
+            gh pr edit $PR_NUMBER --title "$PR_TITLE" --body "$(cat <<'EOF'
+          This PR contains transformed articles for Qiita publication.
+          
+          ## Changes
+          - Transformed frontmatter format from articles/ to Qiita format
+          - Files are saved in public/ directory
+          - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
+          
+          ## Frontmatter Transformation
+          - `topics` → `tags` (array format)
+          - `published` → `private` (inverted boolean)
+          - Removed `emoji` and `type` fields
+          - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
+          
+          ## Source
+          - Triggered by: ${{ github.event_name }}
+          - Source branch: ${{ github.head_ref || github.ref_name }}
+          EOF
+          )"
+          else
+            echo "Creating new PR"
+            gh pr create \
+              --base main \
+              --head $BRANCH_NAME \
+              --title "$PR_TITLE" \
+              --body "$(cat <<'EOF'
+          This PR contains transformed articles for Qiita publication.
+          
+          ## Changes
+          - Transformed frontmatter format from articles/ to Qiita format
+          - Files are saved in public/ directory
+          - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
+          
+          ## Frontmatter Transformation
+          - `topics` → `tags` (array format)
+          - `published` → `private` (inverted boolean)
+          - Removed `emoji` and `type` fields
+          - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
+          
+          ## Source
+          - Triggered by: ${{ github.event_name }}
+          - Source branch: ${{ github.head_ref || github.ref_name }}
+          EOF
+          )" \
+              --reviewer quicksilversel
+          fi

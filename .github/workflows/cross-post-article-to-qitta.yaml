@@ -25,7 +25,6 @@ jobs:
   process-articles:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@v4
         with:
@@ -157,17 +156,8 @@ jobs:
             echo "num_articles=$num_articles" >> $GITHUB_OUTPUT
           fi
       
-      - name: Commit changes in PR
-        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name == 'pull_request'
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add public/
-          git commit -m "Transform article frontmatter for Qiita"
-          git push
-      
-      - name: Create Pull Request
-        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name != 'pull_request'
+      - name: Create or Update Pull Request
+        if: steps.check_changes.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -179,14 +169,18 @@ jobs:
             ## Changes
             - Transformed frontmatter format from articles/ to Qiita format
             - Files are saved in public/ directory
+            - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
             
             ## Frontmatter Transformation
             - `topics` → `tags` (array format)
             - `published` → `private` (inverted boolean)
             - Removed `emoji` and `type` fields
             - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
-          branch: qiita-post-${{ github.run_number }}
-          delete-branch: true
+            
+            ## Source
+            - Triggered by: ${{ github.event_name }}
+            - Source branch: ${{ github.head_ref || github.ref_name }}
+          branch: qiita-post-articles
+          delete-branch: false
           base: main
-          reviewers: |
-            'quicksilversel'
+          reviewers: quicksilversel

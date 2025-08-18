@@ -155,19 +155,38 @@ jobs:
         if: steps.changed-files.outputs.any_changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         run: |
           # Check if there are any changes in public/ (both tracked and untracked)
           if [ -n "$(git status --porcelain public/)" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "Changes detected in public/"
             
-            # Get first changed file for PR title
-            first_file=$(ls -1 public/*.md 2>/dev/null | head -1)
-            if [ -n "$first_file" ]; then
-              article_name=$(basename "$first_file" .md)
-              echo "article_name=$article_name" >> $GITHUB_OUTPUT
-              echo "Article name: $article_name"
+            # Get article name from the original changed files, not from public/
+            # This ensures we get the real article name
+            first_article=""
+            for file in ${CHANGED_FILES}; do
+              if [[ "$file" == articles/*.md ]]; then
+                first_article=$(basename "$file" .md)
+                break
+              fi
+            done
+            
+            # If we found an article name, use it; otherwise fallback to public/ files
+            if [ -n "$first_article" ]; then
+              article_name="$first_article"
+            else
+              # Fallback: get from public/ but exclude temp files
+              first_file=$(ls -1 public/*.md 2>/dev/null | grep -v '^[0-9a-f]\{20\}\.md$' | head -1)
+              if [ -n "$first_file" ]; then
+                article_name=$(basename "$first_file" .md)
+              else
+                article_name="articles"
+              fi
             fi
+            
+            echo "article_name=$article_name" >> $GITHUB_OUTPUT
+            echo "Article name: $article_name"
             
             # Count number of articles
             num_articles=$(ls -1 public/*.md 2>/dev/null | wc -l)

@@ -25,31 +25,40 @@ jobs:
   process-articles:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       
-      - name: Get changed article files
-        id: changed_files
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v42
+        with:
+          use_rest_api: true
+          files: "articles/**/*.md"
+
+      - name: List all changed files
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         run: |
-          if [ "${{ github.event.before }}" == "0000000000000000000000000000000000000000" ]; then
-            # Initial commit or force push
-            echo "changed_files=$(git ls-files articles/*.md | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          else
-            # Get changed files between commits
-            echo "changed_files=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- 'articles/*.md' | tr '\n' ' ')" >> $GITHUB_OUTPUT
-          fi
+          echo "Changed article files:"
+          for file in ${CHANGED_FILES}; do
+            echo "$file was changed"
+          done
       
       - name: Process and transform articles
-        if: steps.changed_files.outputs.changed_files != ''
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
         run: |
           # Create public directory if it doesn't exist
           mkdir -p public
           
           # Process each changed file
-          for file in ${{ steps.changed_files.outputs.changed_files }}; do
+          for file in ${CHANGED_FILES}; do
             if [ -f "$file" ]; then
               echo "Processing: $file"
               filename=$(basename "$file")
@@ -131,6 +140,7 @@ jobs:
       
       - name: Check for changes
         id: check_changes
+        if: steps.changed-files.outputs.any_changed == 'true'
         run: |
           if git diff --quiet HEAD -- public/; then
             echo "has_changes=false" >> $GITHUB_OUTPUT
@@ -142,10 +152,22 @@ jobs:
               article_name=$(basename "$modified_files" .md)
               echo "article_name=$article_name" >> $GITHUB_OUTPUT
             fi
+            # Count number of articles processed
+            num_articles=$(git diff --name-only HEAD -- public/ | wc -l)
+            echo "num_articles=$num_articles" >> $GITHUB_OUTPUT
           fi
       
+      - name: Commit changes in PR
+        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name == 'pull_request'
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add public/
+          git commit -m "Transform article frontmatter for Qiita"
+          git push
+      
       - name: Create Pull Request
-        if: steps.check_changes.outputs.has_changes == 'true'
+        if: steps.check_changes.outputs.has_changes == 'true' && github.event_name != 'pull_request'
         uses: peter-evans/create-pull-request@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

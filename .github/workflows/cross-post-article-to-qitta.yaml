@@ -1,0 +1,291 @@
+name:  Cross Post Articles to Qiita
+
+on:
+  push:
+    branches:
+      - main
+    paths: 
+      - "articles/*.md"
+  pull_request:
+    branches:
+      - main
+    paths: 
+      - "articles/*.md"
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  process-articles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v42
+        with:
+          use_rest_api: true
+          files: "articles/**/*.md"
+
+      - name: List all changed files
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        run: |
+          echo "Changed article files:"
+          for file in ${CHANGED_FILES}; do
+            echo "$file was changed"
+          done
+      
+      - name: Process and transform articles
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        run: |
+          # Create public directory if it doesn't exist
+          mkdir -p public
+          
+          # Process each changed file
+          for file in ${CHANGED_FILES}; do
+            if [ -f "$file" ]; then
+              echo "Processing: $file"
+              filename=$(basename "$file")
+              output_file="public/$filename"
+              
+              # Extract frontmatter and content
+              awk '
+              BEGIN { in_frontmatter = 0; content_started = 0 }
+              /^---$/ { 
+                if (!content_started) {
+                  if (in_frontmatter == 0) { 
+                    in_frontmatter = 1
+                    print "---"
+                  } else {
+                    in_frontmatter = 0
+                    content_started = 1
+                    # Print transformed frontmatter
+                    if (title != "") print "title: " title
+                    
+                    # Transform topics to tags
+                    if (topics != "") {
+                      # Remove brackets and quotes
+                      gsub(/^\[/, "", topics)
+                      gsub(/\]$/, "", topics)
+                      gsub(/"/, "", topics)
+                      gsub(/'\''/, "", topics)
+                      # Remove spaces around commas
+                      gsub(/ *, */, ",", topics)
+                      
+                      print "tags:"
+                      # Split by comma and print each tag
+                      n = split(topics, tags, ",")
+                      for (i = 1; i <= n; i++) {
+                        # Trim whitespace
+                        gsub(/^ */, "", tags[i])
+                        gsub(/ *$/, "", tags[i])
+                        if (tags[i] != "") {
+                          print "  - \"" tags[i] "\""
+                        }
+                      }
+                    } else {
+                      print "tags:"
+                      print "  - \"\""
+                    }
+                    
+                    # Transform published to private
+                    if (published == "true") {
+                      print "private: false"
+                    } else if (published == "false") {
+                      print "private: true"
+                    } else {
+                      print "private: false"
+                    }
+                    
+                    # Add fixed fields
+                    print "updated_at: \"\""
+                    print "id: null"
+                    print "organization_url_name: null"
+                    print "slide: false"
+                    print "ignorePublish: false"
+                    print "---"
+                  }
+                  next
+                }
+              }
+              in_frontmatter == 1 {
+                # Parse frontmatter fields
+                if ($0 ~ /^title:/) {
+                  title = substr($0, index($0, ":") + 1)
+                  gsub(/^ *"?/, "", title)
+                  gsub(/"? *$/, "", title)
+                }
+                else if ($0 ~ /^topics:/) {
+                  topics = substr($0, index($0, ":") + 1)
+                  gsub(/^ */, "", topics)
+                }
+                else if ($0 ~ /^published:/) {
+                  published = substr($0, index($0, ":") + 1)
+                  gsub(/^ */, "", published)
+                  gsub(/ *$/, "", published)
+                }
+              }
+              content_started == 1 {
+                # Print content as-is
+                print
+              }
+              ' "$file" > "$output_file"
+              
+              echo "Created/Updated: $output_file"
+            fi
+          done
+      
+      - name: Check for changes and prepare
+        id: check_changes
+        if: steps.changed-files.outputs.any_changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANGED_FILES: ${{ steps.changed-files.outputs.all_changed_files }}
+        run: |
+          # Check if there are any changes in public/ (both tracked and untracked)
+          if [ -n "$(git status --porcelain public/)" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in public/"
+            
+            # Get article name from the original changed files, not from public/
+            # This ensures we get the real article name
+            first_article=""
+            for file in ${CHANGED_FILES}; do
+              if [[ "$file" == articles/*.md ]]; then
+                first_article=$(basename "$file" .md)
+                break
+              fi
+            done
+            
+            # If we found an article name, use it; otherwise fallback to public/ files
+            if [ -n "$first_article" ]; then
+              article_name="$first_article"
+            else
+              # Fallback: get from public/ but exclude temp files
+              first_file=$(ls -1 public/*.md 2>/dev/null | grep -v '^[0-9a-f]\{20\}\.md$' | head -1)
+              if [ -n "$first_file" ]; then
+                article_name=$(basename "$first_file" .md)
+              else
+                article_name="articles"
+              fi
+            fi
+            
+            echo "article_name=$article_name" >> $GITHUB_OUTPUT
+            echo "Article name: $article_name"
+            
+            # Count number of articles
+            num_articles=$(ls -1 public/*.md 2>/dev/null | wc -l)
+            echo "num_articles=$num_articles" >> $GITHUB_OUTPUT
+            echo "Number of articles: $num_articles"
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in public/"
+          fi
+      
+      - name: Commit and Push Changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Add and commit changes
+          git add public/
+          git commit -m "Transform article frontmatter for Qiita" || echo "No changes to commit"
+
+          # Create and checkout branch
+          BRANCH_NAME="qiita-post-articles"
+          
+          # Fetch the branch if it exists
+          git fetch origin $BRANCH_NAME:$BRANCH_NAME 2>/dev/null || true
+          
+          # Checkout or create branch
+          if git show-ref --verify --quiet refs/heads/$BRANCH_NAME; then
+            echo "Branch $BRANCH_NAME exists, checking out"
+            git checkout $BRANCH_NAME
+            git merge origin/main --no-edit || true
+          else
+            echo "Creating new branch $BRANCH_NAME"
+            git checkout -b $BRANCH_NAME
+          fi
+          
+          # Push branch
+          git push -u origin $BRANCH_NAME --force
+      
+      - name: Create or Update Pull Request
+        if: steps.check_changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="qiita-post-articles"
+          PR_TITLE="Post ${{ steps.check_changes.outputs.article_name }}.md to Qiita"
+          
+          # Check if PR already exists
+          PR_NUMBER=$(gh pr list --base main --head $BRANCH_NAME --json number --jq '.[0].number' || echo "")
+          
+          if [ -n "$PR_NUMBER" ]; then
+            echo "Updating existing PR #$PR_NUMBER"
+            # Update PR title and body
+            gh pr edit $PR_NUMBER --title "$PR_TITLE" --body "$(cat <<'EOF'
+          This PR contains transformed articles for Qiita publication.
+          
+          ## Changes
+          - Transformed frontmatter format from articles/ to Qiita format
+          - Files are saved in public/ directory
+          - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
+          
+          ## Frontmatter Transformation
+          - `topics` → `tags` (array format)
+          - `published` → `private` (inverted boolean)
+          - Removed `emoji` and `type` fields
+          - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
+          
+          ## Source
+          - Triggered by: ${{ github.event_name }}
+          - Source branch: ${{ github.head_ref || github.ref_name }}
+          EOF
+          )"
+          else
+            echo "Creating new PR"
+            gh pr create \
+              --base main \
+              --head $BRANCH_NAME \
+              --title "$PR_TITLE" \
+              --body "$(cat <<'EOF'
+          This PR contains transformed articles for Qiita publication.
+          
+          ## Changes
+          - Transformed frontmatter format from articles/ to Qiita format
+          - Files are saved in public/ directory
+          - Processed ${{ steps.check_changes.outputs.num_articles }} article(s)
+          
+          ## Frontmatter Transformation
+          - `topics` → `tags` (array format)
+          - `published` → `private` (inverted boolean)
+          - Removed `emoji` and `type` fields
+          - Added Qiita-specific fields: `id`, `organization_url_name`, `slide`, `ignorePublish`, `updated_at`
+          
+          ## Source
+          - Triggered by: ${{ github.event_name }}
+          - Source branch: ${{ github.head_ref || github.ref_name }}
+          EOF
+          )" \
+              --reviewer quicksilversel
+          fi

@@ -79,12 +79,25 @@ jobs:
                     
                     # Transform topics to tags
                     if (topics != "") {
+                      # Remove brackets and quotes
                       gsub(/^\[/, "", topics)
                       gsub(/\]$/, "", topics)
                       gsub(/"/, "", topics)
-                      gsub(/, /, "\n  - ", topics)
+                      gsub(/'\''/, "", topics)
+                      # Remove spaces around commas
+                      gsub(/ *, */, ",", topics)
+                      
                       print "tags:"
-                      print "  - " topics
+                      # Split by comma and print each tag
+                      n = split(topics, tags, ",")
+                      for (i = 1; i <= n; i++) {
+                        # Trim whitespace
+                        gsub(/^ */, "", tags[i])
+                        gsub(/ *$/, "", tags[i])
+                        if (tags[i] != "") {
+                          print "  - \"" tags[i] "\""
+                        }
+                      }
                     } else {
                       print "tags:"
                       print "  - \"\""

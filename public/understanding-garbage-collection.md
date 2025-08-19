@@ -1,12 +1,12 @@
 ---
-title: 'JVMのGarbage Collectionを理解する'
+title: JVMのGarbage Collectionを理解する
 tags:
-  - "java"
-  - "Datadog"
-  - "sre"
+  - Java
+  - Datadog
+  - SRE
 private: false
-updated_at: ""
-id: null
+updated_at: '2025-08-19T10:17:49+09:00'
+id: f633f33e35e0c68807ee
 organization_url_name: null
 slide: false
 ignorePublish: false

@@ -1,5 +1,5 @@
 ---
-title: "ALB Ingressのdeletion_protectionにハマった話"
+title: "AWS ALBのdeletion_protectionにハマった話"
 emoji: "🫠"
 type: "tech"
 topics: [aws, kubernetes, sre]

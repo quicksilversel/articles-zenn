@@ -30,7 +30,7 @@ https://docs.aws.amazon.com/elasticloadbalancing/latest/application/introduction
 alb.ingress.kubernetes.io/load-balancer-attributes: deletion_protection.enabled=false
 ```
 
-## 問題： Ingressが消せない
+## 問題： Ingressを消せない
 
 環境からIngressを削除しようとしたところ、マニフェストでは`deletion_protection.enabled=false`にしていたにも関わらず、ALBが削除できず以下のようなログを吐いて失敗しました。
 

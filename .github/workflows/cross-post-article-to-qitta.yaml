@@ -204,10 +204,6 @@ jobs:
           # Configure git
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          
-          # Add and commit changes
-          git add public/
-          git commit -m "Transform article frontmatter for Qiita" || echo "No changes to commit"
 
           # Create and checkout branch
           BRANCH_NAME="qiita-post-articles"
@@ -224,8 +220,10 @@ jobs:
             echo "Creating new branch $BRANCH_NAME"
             git checkout -b $BRANCH_NAME
           fi
-          
-          # Push branch
+                    
+          # Add and commit changes
+          git add public/
+          git commit -m "Transform article frontmatter for Qiita" || echo "No changes to commit"
           git push -u origin $BRANCH_NAME --force
       
       - name: Create or Update Pull Request
